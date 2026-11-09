@@ -1,0 +1,163 @@
+{
+ "cells": [
+  {
+   "cell_type": "code",
+   "execution_count": 0,
+   "metadata": {
+    "application/vnd.databricks.v1+cell": {
+     "cellMetadata": {
+      "byteLimit": 2048000,
+      "rowLimit": 10000
+     },
+     "inputWidgets": {},
+     "nuid": "cad35d87-5f5f-4114-8eed-2d5aa0d93cf1",
+     "showTitle": true,
+     "tableResultSettingsMap": {},
+     "title": "Install MCP SDK"
+    }
+   },
+   "outputs": [],
+   "source": [
+    "%pip install \"mcp<2\"\n",
+    "dbutils.library.restartPython()"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {
+    "application/vnd.databricks.v1+cell": {
+     "cellMetadata": {
+      "byteLimit": 2048000,
+      "rowLimit": 10000
+     },
+     "inputWidgets": {},
+     "nuid": "2435a8e6-9c75-4d6d-bf06-8d065f4cdc4c",
+     "showTitle": true,
+     "tableResultSettingsMap": {},
+     "title": "About this template"
+    }
+   },
+   "source": [
+    "# Generic MCP Tool Call Template\n",
+    "\n",
+    "The SQL cell below only exists so this demo has an MCP server to talk to (a Databricks UC function). **Skip it when using another server such as Essbase.** The call cell works with any MCP server over Streamable HTTP. Change only `MCP_URL`, `HEADERS`, `TOOL_NAME` and `TOOL_ARGS`."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 0,
+   "metadata": {
+    "application/vnd.databricks.v1+cell": {
+     "cellMetadata": {
+      "byteLimit": 2048000,
+      "implicitDf": true,
+      "rowLimit": 10000
+     },
+     "inputWidgets": {},
+     "nuid": "fa0f6a85-07c1-4f25-b3d2-03920eb10e13",
+     "showTitle": true,
+     "tableResultSettingsMap": {},
+     "title": "Create UC function over bakehouse data"
+    }
+   },
+   "outputs": [],
+   "source": [
+    "%sql\n",
+    "-- UC table function exposed as an MCP tool via /api/2.0/mcp/functions/mfg_mc_se_sa/hobbs\n",
+    "CREATE OR REPLACE FUNCTION mfg_mc_se_sa.hobbs.get_bakehouse_sales_by_country(\n",
+    "  country STRING COMMENT 'Franchise country, e.g. US, Japan, Australia',\n",
+    "  start_date DATE COMMENT 'Inclusive start date (yyyy-MM-dd)',\n",
+    "  end_date DATE COMMENT 'Inclusive end date (yyyy-MM-dd)'\n",
+    ")\n",
+    "RETURNS TABLE (product STRING, transactions BIGINT, units BIGINT, revenue BIGINT)\n",
+    "COMMENT 'Bakehouse sales summarized by product for one franchise country and date range'\n",
+    "RETURN\n",
+    "  SELECT t.product,\n",
+    "         COUNT(*)           AS transactions,\n",
+    "         SUM(t.quantity)    AS units,\n",
+    "         SUM(t.totalPrice)  AS revenue\n",
+    "  FROM samples.bakehouse.sales_transactions t\n",
+    "  JOIN samples.bakehouse.sales_franchises f ON t.franchiseID = f.franchiseID\n",
+    "  WHERE f.country = get_bakehouse_sales_by_country.country\n",
+    "    AND CAST(t.dateTime AS DATE) BETWEEN start_date AND end_date\n",
+    "  GROUP BY t.product\n",
+    "  ORDER BY revenue DESC"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 0,
+   "metadata": {
+    "application/vnd.databricks.v1+cell": {
+     "cellMetadata": {
+      "byteLimit": 2048000,
+      "rowLimit": 10000
+     },
+     "inputWidgets": {},
+     "nuid": "db439bc1-6fc2-4206-9e3e-fe0185dc2aa8",
+     "showTitle": true,
+     "tableResultSettingsMap": {},
+     "title": "Call MCP tool"
+    }
+   },
+   "outputs": [],
+   "source": [
+    "from databricks.sdk import WorkspaceClient\n",
+    "from mcp import ClientSession\n",
+    "from mcp.client.streamable_http import streamablehttp_client\n",
+    "\n",
+    "# ---- The only things to change for a different MCP server (e.g. Essbase) ----\n",
+    "w = WorkspaceClient()\n",
+    "MCP_URL = f\"{w.config.host}/api/2.0/mcp/functions/mfg_mc_se_sa/hobbs\"\n",
+    "HEADERS = w.config.authenticate()  # {\"Authorization\": \"Bearer ...\"} from notebook auth\n",
+    "TOOL_NAME = \"mfg_mc_se_sa__hobbs__get_bakehouse_sales_by_country\"\n",
+    "TOOL_ARGS = {\"country\": \"Japan\", \"start_date\": \"2024-05-01\", \"end_date\": \"2024-05-17\"}\n",
+    "\n",
+    "# Essbase example (keep the token in a secret scope, never hard-code it):\n",
+    "# MCP_URL   = \"https://<essbase-host>/<mcp-path>\"\n",
+    "# HEADERS   = {\"Authorization\": f\"Bearer {dbutils.secrets.get('<scope>', '<key>')}\"}\n",
+    "# TOOL_NAME = \"<tool name printed by list_tools below>\"\n",
+    "# TOOL_ARGS = {...}\n",
+    "# -----------------------------------------------------------------------------\n",
+    "\n",
+    "async with streamablehttp_client(MCP_URL, headers=HEADERS) as (read, write, _):\n",
+    "    async with ClientSession(read, write) as session:\n",
+    "        await session.initialize()\n",
+    "        for t in (await session.list_tools()).tools:  # discover tools + expected args\n",
+    "            print(t.name, t.inputSchema)\n",
+    "        result = await session.call_tool(TOOL_NAME, TOOL_ARGS)\n",
+    "\n",
+    "for c in result.content:\n",
+    "    print(c.text)"
+   ]
+  }
+ ],
+ "metadata": {
+  "application/vnd.databricks.v1+notebook": {
+   "computePreferences": null,
+   "dashboards": [],
+   "environmentMetadata": {
+    "base_environment": "",
+    "environment_version": "6"
+   },
+   "inputWidgetPreferences": null,
+   "language": "python",
+   "notebookMetadata": {
+    "mostRecentlyExecutedCommandWithImplicitDF": {
+     "commandId": 8596238902709849,
+     "dataframes": [
+      "_sqldf"
+     ]
+    },
+    "pythonIndentUnit": 4
+   },
+   "notebookName": "MCP Tool Call Bakehouse Example",
+   "widgets": {}
+  },
+  "language_info": {
+   "name": "python"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 0
+}
